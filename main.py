@@ -86,7 +86,7 @@ def actor_learner_thread(num, env, session, graph_ops, summary_ops, saver):
             s_batch.append(s_t)
             a_batch.append(a_t)
 
-            s_t1, r_t, terminal, info = env.step(action_index)
+            s_t, r_t, terminal, info = env.step(action_index)
             ep_reward += r_t
 
             past_rewards.append(r_t)
@@ -95,8 +95,6 @@ def actor_learner_thread(num, env, session, graph_ops, summary_ops, saver):
             T += 1
             ep_t += 1
             probs_summary_t += 1
-
-            s_t = s_t1
 
         if terminal:
             R_t = 0
@@ -256,4 +254,4 @@ def main(_):
         train(session, graph_ops, saver)
 
 if __name__ == "__main__":
-  tf.app.run()
+    tf.app.run()
