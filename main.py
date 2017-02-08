@@ -28,11 +28,12 @@ def sample_policy_action(probs):
     """
     # Subtract a tiny value from probabilities in order to avoid
     # "ValueError: sum(pvals[:-1]) > 1.0" in numpy.multinomial
-    probs = probs - np.finfo(np.float32).epsneg
-
-    histogram = np.random.multinomial(1, probs)
-    action_index = int(np.nonzero(histogram)[0])
-    return action_index
+    # probs = probs - np.finfo(np.float32).epsneg
+    #
+    # histogram = np.random.multinomial(1, probs)
+    # action_index = int(np.nonzero(histogram)[0])
+    # return action_index
+    return np.random.choice(range(len(probs)), p=probs)
 
 
 def actor_learner_thread(num, env, session, graph_ops, summary_ops, saver):
@@ -81,7 +82,7 @@ def actor_learner_thread(num, env, session, graph_ops, summary_ops, saver):
             a_t[action_index] = 1
 
             if probs_summary_t % 100 == 0:
-                print("P, ", np.max(probs), "V ", session.run(v_network, feed_dict={s: [s_t]})[0][0])
+                print("P, ", probs, "V ", session.run(v_network, feed_dict={s: [s_t]})[0][0])
 
             s_batch.append(s_t)
             a_batch.append(a_t)
@@ -89,6 +90,7 @@ def actor_learner_thread(num, env, session, graph_ops, summary_ops, saver):
             s_t, r_t, terminal, info = env.step(action_index)
             ep_reward += r_t
 
+            r_t = np.clip(r_t, -1., 1.)
             past_rewards.append(r_t)
 
             t += 1
@@ -199,29 +201,57 @@ def evaluation(session, graph_ops, saver):
 
 
 def build_graph(num_actions):
-  s, p_network, v_network, p_params, v_params = \
-    build_policy_and_value_networks(num_actions=num_actions, agent_history_length=FLAGS.agent_history_length,
-                                    resized_width=FLAGS.resized_width, resized_height=FLAGS.resized_height)
-  # Shared global optimizer
-  optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
-  # optimizer = tf.train.RMSPropOptimizer(learning_rate=FLAGS.learning_rate, decay=FLAGS.alpha, use_locking=False)
+    # Create shared global policy and value networks
+    s, p_logits, v_network, p_params, v_params = build_policy_and_value_networks(num_actions=num_actions, agent_history_length=FLAGS.agent_history_length, resized_width=FLAGS.resized_width, resized_height=FLAGS.resized_height)
 
-  # Op for applying remote gradients
-  R_t = tf.placeholder("float", [None])
-  a_t = tf.placeholder("float", [None, num_actions])
+    # Shared global optimizer
+    if FLAGS.use_adam:
+        optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+    elif FLAGS.use_rmsprop:
+        optimizer = tf.train.RMSPropOptimizer(learning_rate=FLAGS.learning_rate, epsilon=FLAGS.epsilon, decay=FLAGS.alpha, use_locking=False)
+    else:
+        raise Exception("optimizer not specified")
 
-  log_pi = tf.log(tf.clip_by_value(p_network, 1e-20, 1.0))
-  entropy = -tf.reduce_sum(p_network * log_pi, reduction_indices=1)
+    # Op for applying remote gradients
+    R_t = tf.placeholder("float", [None])
+    a_t = tf.placeholder("float", [None, num_actions])
+    p_network = tf.nn.softmax(p_logits)
 
-  # the paper gives formula for gradient ascent, we use a gradient descent optimizer, therefore negate sign:
-  p_loss = -tf.reduce_sum(tf.reduce_sum(tf.mul(log_pi, a_t), reduction_indices=1) * (R_t - v_network) + FLAGS.beta * entropy)
-  v_loss = tf.nn.l2_loss(R_t - v_network)
+    log_probs = tf.nn.log_softmax(tf.clip_by_value(p_logits, 1e-20, 1.0))
+    action_prob = tf.reduce_sum(a_t * log_probs, 1)
 
-  # critic learning rate is half that of the actor
-  total_loss = p_loss + (0.5 * v_loss)
+    p_loss = -action_prob * (R_t - tf.stop_gradient(v_network))
+    v_loss = tf.reduce_mean(tf.square(R_t - v_network))
 
-  minimize = optimizer.minimize(total_loss)
-  return s, a_t, R_t, minimize, p_network, v_network
+    entropy = tf.reduce_sum(p_network * log_probs)
+    total_loss = p_loss + 0.5*v_loss + FLAGS.beta*entropy
+
+    minimize = optimizer.minimize(total_loss)
+    return s, a_t, R_t, minimize, p_network, v_network
+
+    # s, p_network, v_network, p_params, v_params = \
+    # build_policy_and_value_networks(num_actions=num_actions, agent_history_length=FLAGS.agent_history_length,
+    #                                 resized_width=FLAGS.resized_width, resized_height=FLAGS.resized_height)
+    # # Shared global optimizer
+    # optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
+    # # optimizer = tf.train.RMSPropOptimizer(learning_rate=FLAGS.learning_rate, decay=FLAGS.alpha, use_locking=False)
+    #
+    # # Op for applying remote gradients
+    # R_t = tf.placeholder("float", [None])
+    # a_t = tf.placeholder("float", [None, num_actions])
+    #
+    # log_pi = tf.log(tf.clip_by_value(p_network, 1e-20, 1.0))
+    # entropy = -tf.reduce_sum(p_network * log_pi, reduction_indices=1)
+    #
+    # # the paper gives formula for gradient ascent, we use a gradient descent optimizer, therefore negate sign:
+    # p_loss = -tf.reduce_sum(tf.reduce_sum(tf.mul(log_pi, a_t), reduction_indices=1) * (R_t - v_network) + FLAGS.beta * entropy)
+    # v_loss = tf.nn.l2_loss(R_t - v_network)
+    #
+    # # critic learning rate is half that of the actor
+    # total_loss = p_loss + (0.5 * v_loss)
+    #
+    # minimize = optimizer.minimize(total_loss)
+    # return s, a_t, R_t, minimize, p_network, v_network
 
 
 def get_num_actions(env=None):
