@@ -33,7 +33,9 @@ def sample_policy_action(probs):
     # histogram = np.random.multinomial(1, probs)
     # action_index = int(np.nonzero(histogram)[0])
     # return action_index
-    return np.random.choice(range(len(probs)), p=probs)
+    index = np.random.choice(range(len(probs)), p=probs)
+    #print 'Chosen action with prob %f' %probs[index]
+    return index 
 
 
 def actor_learner_thread(num, env, session, graph_ops, summary_ops, saver):
